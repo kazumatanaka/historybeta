@@ -3095,6 +3095,9 @@
                 el.dataset.id = c.id;
                 el.style.position = 'relative';
 
+                const isItem = c.type === 'item';
+                const isSelected = isItem ? bossItemIds.includes(c.id) : bossDeckIds.includes(c.id);
+
                 let itemEffectOverlay = '';
                 if (isItem) {
                     const category = getItemCategory(c);
