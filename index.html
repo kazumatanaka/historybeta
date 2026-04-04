@@ -2695,88 +2695,74 @@
 
         async function loadCloudData() {
             if (!currentUser || !window.db) return;
+            
+            // Timeout promise to prevent hanging
+            const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000));
+            
             try {
-                // Must import Realtime Database module in the head script
-                const { ref, get, child } = await import("https://www.gstatic.com/firebasejs/12.10.0/firebase-database.js");
-                const dbRef = ref(window.db);
-                const snapshot = await get(child(dbRef, `users/${currentUser}`));
+                const loadProcess = (async () => {
+                    const { ref, get, child } = await import("https://www.gstatic.com/firebasejs/12.10.0/firebase-database.js");
+                    const dbRef = ref(window.db);
+                    const snapshot = await get(child(dbRef, `users/${currentUser}`));
 
-                if (snapshot.exists()) {
-                    const data = snapshot.val();
-                    const localUpdate = localStorage.getItem('history_game_last_update');
-                    const cloudUpdate = data.lastUpdated;
+                    if (snapshot.exists()) {
+                        const data = snapshot.val();
+                        const localUpdate = localStorage.getItem('history_game_last_update');
+                        const cloudUpdate = data.lastUpdated;
 
-                    // Check if local data is newer (offline progress exists)
-                    if (localUpdate && cloudUpdate && new Date(localUpdate) > new Date(cloudUpdate)) {
-                        console.log("Local progress is newer than cloud. Syncing up...");
-                        await saveCloudData();
-                        // Local data is already the source of truth
+                        // Robust comparison for dates
+                        const localTime = localUpdate ? new Date(localUpdate).getTime() : 0;
+                        const cloudTime = cloudUpdate ? new Date(cloudUpdate).getTime() : 0;
+
+                        if (!isNaN(localTime) && !isNaN(cloudTime) && localTime > cloudTime) {
+                            console.log("Local progress is newer. Syncing up...");
+                            await saveCloudData();
+                        } else {
+                            if (data.userCards) userCards = data.userCards;
+                            if (data.userStats) userStats = data.userStats;
+                            if (data.userSettings) userSettings = data.userSettings;
+                            if (data.bossDeckIds) bossDeckIds = data.bossDeckIds;
+                            if (data.bossItemIds) bossItemIds = data.bossItemIds;
+                            if (data.playedStories) playedStories = data.playedStories;
+                            if (data.firstVisit !== undefined) firstVisit = data.firstVisit;
+                            if (cloudUpdate) localStorage.setItem('history_game_last_update', cloudUpdate);
+                        }
                     } else {
-                        // Load from cloud as usual
-                        if (data.userCards) userCards = data.userCards;
-                        if (data.userStats) userStats = data.userStats;
-                        if (data.userSettings) userSettings = data.userSettings;
-                        if (data.bossDeckIds) bossDeckIds = data.bossDeckIds;
-                        if (data.bossItemIds) bossItemIds = data.bossItemIds;
-                        if (data.playedStories) playedStories = data.playedStories;
-                        if (data.firstVisit !== undefined) firstVisit = data.firstVisit;
-                        
-                        // Sync local timestamp to match cloud's one
-                        if (cloudUpdate) localStorage.setItem('history_game_last_update', cloudUpdate);
+                        console.log("New User Profile migration check.");
+                        const localStats = localStorage.getItem(STORAGE_KEY);
+                        const localCards = localStorage.getItem(CARD_STORAGE_KEY);
+                        const localSettings = localStorage.getItem(SETTINGS_KEY);
+
+                        if (localStats || localCards) {
+                            userStats = localStats ? JSON.parse(localStats) : { trialPlayCount: 0, trialCorrect: 0, trialMaxStreak: 0, battlePlayCount: 0, bossDefeats: 0 };
+                            userCards = localCards ? JSON.parse(localCards) : [];
+                            userSettings = localSettings ? JSON.parse(localSettings) : { bgm: true, se: true };
+                            firstVisit = true;
+                        }
+                        await saveCloudData(); 
                     }
-                } else {
-                    // New User Profile - initialize with defaults, OR migrate existing LocalStorage data
-                    console.log("No cloud data found for " + currentUser + ". Checking local storage for migration.");
+                });
 
-                    const localStats = localStorage.getItem(STORAGE_KEY);
-                    const localCards = localStorage.getItem(CARD_STORAGE_KEY);
-                    const localSettings = localStorage.getItem(SETTINGS_KEY);
-
-                    if (localStats || localCards) {
-                        console.log("Found existing local data. Migrating to cloud for: " + currentUser);
-                        userStats = localStats ? JSON.parse(localStats) : { trialPlayCount: 0, trialCorrect: 0, trialMaxStreak: 0, battlePlayCount: 0, bossDefeats: 0 };
-                        userCards = localCards ? JSON.parse(localCards) : [];
-                        userSettings = localSettings ? JSON.parse(localSettings) : { bgm: true, se: true };
-                        bossDeckIds = []; // No reliable local storage for boss decks
-                        bossItemIds = [];
-                        playedStories = [];
-                        firstVisit = true;
-                    } else {
-                        console.log("No local data found. Starting completely fresh.");
-                        userCards = [];
-                        userStats = { trialPlayCount: 0, trialCorrect: 0, trialMaxStreak: 0, battlePlayCount: 0, bossDefeats: 0 };
-                        userSettings = { bgm: true, se: true };
-                        bossDeckIds = [];
-                        bossItemIds = [];
-                        playedStories = [];
-                        firstVisit = true;
-                    }
-
-                    await saveCloudData(); // Create the document in Firebase
-                }
-
-                // Apply loaded settings
-                isBgmEnabled = userSettings.bgm;
-                isSeEnabled = userSettings.se;
-                if (!isBgmEnabled) document.getElementById('bgm-toggle-btn').classList.add('gray-out');
-                else document.getElementById('bgm-toggle-btn').classList.remove('gray-out');
-                if (!isSeEnabled) document.getElementById('se-toggle-btn').classList.add('gray-out');
-                else document.getElementById('se-toggle-btn').classList.remove('gray-out');
+                await Promise.race([loadProcess(), timeout]);
 
             } catch (error) {
-                console.error("Error loading cloud data: ", error);
-                
-                // If offline or permission denied, try to proceed with local data
-                const isOffline = !navigator.onLine;
-                const errorMsg = isOffline ? "オフラインです。" : "権限エラーまたは通信エラーです。";
-                
-                const useLocal = confirm(`クラウドデータの同期に失敗しました（${errorMsg}）。\nこのまま本体保存（オフライン）のデータで遊びますか？\n\nエラー: ` + error.message);
-                if (useLocal) {
-                    console.log("Proceeding with local data fallback.");
-                    // Data is already initialized from localStorage at the top of the script.
-                    // We just need to hide the loading text and proceed.
-                } else {
-                    throw error;
+                console.error("Cloud data process error/timeout: ", error);
+                // Fail silently and use local data if it's a timeout or simple error
+                // Only show confirm if it's a clear Permission Denied
+                if (error.message.includes("permission_denied") || error.message.includes("Permission denied")) {
+                    alert("データベースの権限エラーです。Firebaseのルールを確認してください。\nオフラインモードで開始します。");
+                }
+            } finally {
+                // Ensure loaded settings are applied regardless of success
+                isBgmEnabled = userSettings.bgm;
+                isSeEnabled = userSettings.se;
+                if (document.getElementById('bgm-toggle-btn')) {
+                    if (!isBgmEnabled) document.getElementById('bgm-toggle-btn').classList.add('gray-out');
+                    else document.getElementById('bgm-toggle-btn').classList.remove('gray-out');
+                }
+                if (document.getElementById('se-toggle-btn')) {
+                    if (!isSeEnabled) document.getElementById('se-toggle-btn').classList.add('gray-out');
+                    else document.getElementById('se-toggle-btn').classList.remove('gray-out');
                 }
             }
         }
