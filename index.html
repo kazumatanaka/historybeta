@@ -2498,7 +2498,10 @@
         }
 
         function saveStats() {
+            const now = new Date().toISOString();
             localStorage.setItem(STORAGE_KEY, JSON.stringify(userStats));
+            localStorage.setItem(CARD_STORAGE_KEY, JSON.stringify(userCards));
+            localStorage.setItem('history_game_last_update', now);
             if (typeof saveCloudData === 'function') saveCloudData();
         }
 
@@ -2700,13 +2703,27 @@
 
                 if (snapshot.exists()) {
                     const data = snapshot.val();
-                    if (data.userCards) userCards = data.userCards;
-                    if (data.userStats) userStats = data.userStats;
-                    if (data.userSettings) userSettings = data.userSettings;
-                    if (data.bossDeckIds) bossDeckIds = data.bossDeckIds;
-                    if (data.bossItemIds) bossItemIds = data.bossItemIds;
-                    if (data.playedStories) playedStories = data.playedStories;
-                    if (data.firstVisit !== undefined) firstVisit = data.firstVisit;
+                    const localUpdate = localStorage.getItem('history_game_last_update');
+                    const cloudUpdate = data.lastUpdated;
+
+                    // Check if local data is newer (offline progress exists)
+                    if (localUpdate && cloudUpdate && new Date(localUpdate) > new Date(cloudUpdate)) {
+                        console.log("Local progress is newer than cloud. Syncing up...");
+                        await saveCloudData();
+                        // Local data is already the source of truth
+                    } else {
+                        // Load from cloud as usual
+                        if (data.userCards) userCards = data.userCards;
+                        if (data.userStats) userStats = data.userStats;
+                        if (data.userSettings) userSettings = data.userSettings;
+                        if (data.bossDeckIds) bossDeckIds = data.bossDeckIds;
+                        if (data.bossItemIds) bossItemIds = data.bossItemIds;
+                        if (data.playedStories) playedStories = data.playedStories;
+                        if (data.firstVisit !== undefined) firstVisit = data.firstVisit;
+                        
+                        // Sync local timestamp to match cloud's one
+                        if (cloudUpdate) localStorage.setItem('history_game_last_update', cloudUpdate);
+                    }
                 } else {
                     // New User Profile - initialize with defaults, OR migrate existing LocalStorage data
                     console.log("No cloud data found for " + currentUser + ". Checking local storage for migration.");
@@ -3976,8 +3993,7 @@
 
                         const isNew = !userCards.some(c => c.id === draw.id);
                         userCards.push({ id: draw.id, grade: gradeToGive });
-                        localStorage.setItem(CARD_STORAGE_KEY, JSON.stringify(userCards));
-                        if (typeof saveCloudData === 'function') saveCloudData();
+                        saveStats(); // Saves both Stats and Cards locally & cloud with timestamp
                         setTimeout(() => openCardModal(draw, isNew), 500);
                     }
                 }
