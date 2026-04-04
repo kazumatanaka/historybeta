@@ -24,6 +24,16 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
         import { getDatabase } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-database.js";
+        
+        // PWA Service Worker Registration
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(reg => console.log('Service Worker registered', reg))
+                    .catch(err => console.log('Service Worker registration failed', err));
+            });
+        }
+
 
         const firebaseConfig = {
             apiKey: "AIzaSyBbEdRe8KJmugaAiTBM-X7ZqsljSMwjI3c",
@@ -2738,8 +2748,19 @@
 
             } catch (error) {
                 console.error("Error loading cloud data: ", error);
-                alert("データの読み込みに失敗しました！通信環境やデータベースのセキュリティ設定をご確認ください。\nエラー: " + error.message);
-                throw error;
+                
+                // If offline or permission denied, try to proceed with local data
+                const isOffline = !navigator.onLine;
+                const errorMsg = isOffline ? "オフラインです。" : "権限エラーまたは通信エラーです。";
+                
+                const useLocal = confirm(`クラウドデータの同期に失敗しました（${errorMsg}）。\nこのまま本体保存（オフライン）のデータで遊びますか？\n\nエラー: ` + error.message);
+                if (useLocal) {
+                    console.log("Proceeding with local data fallback.");
+                    // Data is already initialized from localStorage at the top of the script.
+                    // We just need to hide the loading text and proceed.
+                } else {
+                    throw error;
+                }
             }
         }
 
