@@ -2666,6 +2666,10 @@
         // Firebase Cloud Save Support
         let currentUser = null; // '親', 'Emily', 'Guy', 'Leo'
         let playedStories = [];
+        let firstVisit = true;
+        let bossDeckIds = [];
+        let bossItemIds = [];
+        let activeBossItems = [];
 
         async function selectProfile(profileName) {
             playSound('click');
@@ -2934,9 +2938,6 @@
         let trialCard = null;
         let trialCorrectCount = 0;
 
-        let bossDeckIds = [];
-        let bossItemIds = [];
-        let activeBossItems = [];
         let bossStats = { str: 0, int: 0, cha: 0 };
 
         const enemyImages = [
