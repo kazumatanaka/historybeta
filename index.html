@@ -24,16 +24,6 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
         import { getDatabase } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-database.js";
-        
-        // PWA Service Worker Registration
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js')
-                    .then(reg => console.log('Service Worker registered', reg))
-                    .catch(err => console.log('Service Worker registration failed', err));
-            });
-        }
-
 
         const firebaseConfig = {
             apiKey: "AIzaSyBbEdRe8KJmugaAiTBM-X7ZqsljSMwjI3c",
@@ -2484,11 +2474,9 @@
 
     <script>
         const STORAGE_KEY = 'history_game_god_v1';
-        let userStats = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+        let userStats = {};
         const CARD_STORAGE_KEY = 'history_game_cards_god_v1';
-        let userCards = JSON.parse(localStorage.getItem(CARD_STORAGE_KEY)) || [];
-        // Migrate to object schema containing grade
-        userCards = userCards.map(c => typeof c === 'string' ? { id: c, grade: 0 } : c);
+        let userCards = [];
 
         function getStat(id) { if (!userStats[id]) userStats[id] = { w: 0, s: 0, f: 0 }; return userStats[id]; }
         function saveStat(id, isCorrect, type = 'battle') {
@@ -2499,9 +2487,11 @@
 
         function saveStats() {
             const now = new Date().toISOString();
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(userStats));
-            localStorage.setItem(CARD_STORAGE_KEY, JSON.stringify(userCards));
-            localStorage.setItem('history_game_last_update', now);
+            if (currentUser) {
+                localStorage.setItem(`profile_${currentUser}_stats`, JSON.stringify(userStats));
+                localStorage.setItem(`profile_${currentUser}_cards`, JSON.stringify(userCards));
+                localStorage.setItem(`profile_${currentUser}_last_update`, now);
+            }
             if (typeof saveCloudData === 'function') saveCloudData();
         }
 
@@ -2666,10 +2656,6 @@
         // Firebase Cloud Save Support
         let currentUser = null; // '親', 'Emily', 'Guy', 'Leo'
         let playedStories = [];
-        let firstVisit = true;
-        let bossDeckIds = [];
-        let bossItemIds = [];
-        let activeBossItems = [];
 
         async function selectProfile(profileName) {
             playSound('click');
@@ -2693,6 +2679,13 @@
         function logoutProfile() {
             playSound('cancel');
             currentUser = null;
+            userCards = [];
+            userStats = {};
+            playedStories = [];
+            bossDeckIds = [];
+            bossItemIds = [];
+            activeBossItems = [];
+            firstVisit = true;
             document.getElementById('profile-select-screen').style.display = 'flex';
             showScreen('profile-select-screen');
         }
@@ -2700,7 +2693,7 @@
         async function loadCloudData() {
             if (!currentUser || !window.db) return;
             
-            // Timeout promise to prevent hanging
+            // Timeout promise to prevent hanging (5 seconds)
             const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000));
             
             try {
@@ -2709,9 +2702,13 @@
                     const dbRef = ref(window.db);
                     const snapshot = await get(child(dbRef, `users/${currentUser}`));
 
+                    const localStatsKey = `profile_${currentUser}_stats`;
+                    const localCardsKey = `profile_${currentUser}_cards`;
+                    const localUpdateKey = `profile_${currentUser}_last_update`;
+
                     if (snapshot.exists()) {
                         const data = snapshot.val();
-                        const localUpdate = localStorage.getItem('history_game_last_update');
+                        const localUpdate = localStorage.getItem(localUpdateKey);
                         const cloudUpdate = data.lastUpdated;
 
                         // Robust comparison for dates
@@ -2719,9 +2716,20 @@
                         const cloudTime = cloudUpdate ? new Date(cloudUpdate).getTime() : 0;
 
                         if (!isNaN(localTime) && !isNaN(cloudTime) && localTime > cloudTime) {
-                            console.log("Local progress is newer. Syncing up...");
+                            console.log("Local progress is newer than cloud. Syncing up...");
+                            // Load from local storage
+                            const localStats = localStorage.getItem(localStatsKey);
+                            const localCards = localStorage.getItem(localCardsKey);
+                            userStats = localStats ? JSON.parse(localStats) : {};
+                            userCards = localCards ? JSON.parse(localCards) : [];
+                            if (data.userSettings) userSettings = data.userSettings;
+                            if (data.bossDeckIds) bossDeckIds = data.bossDeckIds;
+                            if (data.bossItemIds) bossItemIds = data.bossItemIds;
+                            if (data.playedStories) playedStories = data.playedStories;
+                            if (data.firstVisit !== undefined) firstVisit = data.firstVisit;
                             await saveCloudData();
                         } else {
+                            // Load from cloud
                             if (data.userCards) userCards = data.userCards;
                             if (data.userStats) userStats = data.userStats;
                             if (data.userSettings) userSettings = data.userSettings;
@@ -2729,21 +2737,57 @@
                             if (data.bossItemIds) bossItemIds = data.bossItemIds;
                             if (data.playedStories) playedStories = data.playedStories;
                             if (data.firstVisit !== undefined) firstVisit = data.firstVisit;
-                            if (cloudUpdate) localStorage.setItem('history_game_last_update', cloudUpdate);
+                            
+                            // Save to local storage cache
+                            localStorage.setItem(localStatsKey, JSON.stringify(userStats));
+                            localStorage.setItem(localCardsKey, JSON.stringify(userCards));
+                            if (cloudUpdate) localStorage.setItem(localUpdateKey, cloudUpdate);
                         }
                     } else {
-                        console.log("New User Profile migration check.");
-                        const localStats = localStorage.getItem(STORAGE_KEY);
-                        const localCards = localStorage.getItem(CARD_STORAGE_KEY);
-                        const localSettings = localStorage.getItem(SETTINGS_KEY);
-
+                        console.log("New User Profile. Checking local storage for migration.");
+                        // 1. Check if profile-specific data already exists locally (e.g. played offline before first cloud write)
+                        const localStats = localStorage.getItem(localStatsKey);
+                        const localCards = localStorage.getItem(localCardsKey);
+                        
                         if (localStats || localCards) {
+                            console.log("Found profile-specific local data.");
                             userStats = localStats ? JSON.parse(localStats) : { trialPlayCount: 0, trialCorrect: 0, trialMaxStreak: 0, battlePlayCount: 0, bossDefeats: 0 };
                             userCards = localCards ? JSON.parse(localCards) : [];
-                            userSettings = localSettings ? JSON.parse(localSettings) : { bgm: true, se: true };
                             firstVisit = true;
+                        } else {
+                            // 2. Check legacy global keys for migration (one-time fallback)
+                            const legacyStats = localStorage.getItem(STORAGE_KEY);
+                            const legacyCards = localStorage.getItem(CARD_STORAGE_KEY);
+                            const legacySettings = localStorage.getItem(SETTINGS_KEY);
+                            
+                            if (legacyStats || legacyCards) {
+                                console.log("Found legacy global data. Migrating to: " + currentUser);
+                                userStats = legacyStats ? JSON.parse(legacyStats) : { trialPlayCount: 0, trialCorrect: 0, trialMaxStreak: 0, battlePlayCount: 0, bossDefeats: 0 };
+                                userCards = legacyCards ? JSON.parse(legacyCards) : [];
+                                userSettings = legacySettings ? JSON.parse(legacySettings) : { bgm: true, se: true };
+                                firstVisit = true;
+                                
+                                // Write to profile-specific keys immediately
+                                localStorage.setItem(localStatsKey, JSON.stringify(userStats));
+                                localStorage.setItem(localCardsKey, JSON.stringify(userCards));
+                                localStorage.setItem(localUpdateKey, new Date().toISOString());
+                                
+                                // Clear legacy global keys to prevent migrating them to other profiles!
+                                localStorage.removeItem(STORAGE_KEY);
+                                localStorage.removeItem(CARD_STORAGE_KEY);
+                                localStorage.removeItem('history_game_last_update');
+                            } else {
+                                console.log("Starting completely fresh.");
+                                userCards = [];
+                                userStats = { trialPlayCount: 0, trialCorrect: 0, trialMaxStreak: 0, battlePlayCount: 0, bossDefeats: 0 };
+                                userSettings = { bgm: true, se: true };
+                                bossDeckIds = [];
+                                bossItemIds = [];
+                                playedStories = [];
+                                firstVisit = true;
+                            }
                         }
-                        await saveCloudData(); 
+                        await saveCloudData();
                     }
                 });
 
@@ -2756,8 +2800,16 @@
                 if (error.message.includes("permission_denied") || error.message.includes("Permission denied")) {
                     alert("データベースの権限エラーです。Firebaseのルールを確認してください。\nオフラインモードで開始します。");
                 }
+                
+                // Load local profile-specific data as fallback if available
+                const localStatsKey = `profile_${currentUser}_stats`;
+                const localCardsKey = `profile_${currentUser}_cards`;
+                const localStats = localStorage.getItem(localStatsKey);
+                const localCards = localStorage.getItem(localCardsKey);
+                if (localStats) userStats = JSON.parse(localStats);
+                if (localCards) userCards = JSON.parse(localCards);
             } finally {
-                // Ensure loaded settings are applied regardless of success
+                // Apply loaded settings
                 isBgmEnabled = userSettings.bgm;
                 isSeEnabled = userSettings.se;
                 if (document.getElementById('bgm-toggle-btn')) {
@@ -2938,6 +2990,9 @@
         let trialCard = null;
         let trialCorrectCount = 0;
 
+        let bossDeckIds = [];
+        let bossItemIds = [];
+        let activeBossItems = [];
         let bossStats = { str: 0, int: 0, cha: 0 };
 
         const enemyImages = [
@@ -3400,7 +3455,7 @@
 
                 userCards[ownedIdx].grade = newGrade;
                 finalGrade = newGrade;
-                localStorage.setItem(CARD_STORAGE_KEY, JSON.stringify(userCards));
+                if (currentUser) localStorage.setItem('profile_' + currentUser + '_cards', JSON.stringify(userCards));
 
                 // Track historical max/min to preserve carousel history even if grade drops
                 // We check both currentGrade and newGrade to self-heal pre-patch cards that
@@ -3980,7 +4035,8 @@
 
                         const isNew = !userCards.some(c => c.id === draw.id);
                         userCards.push({ id: draw.id, grade: gradeToGive });
-                        saveStats(); // Saves both Stats and Cards locally & cloud with timestamp
+                        if (currentUser) localStorage.setItem('profile_' + currentUser + '_cards', JSON.stringify(userCards));
+                        if (typeof saveCloudData === 'function') saveCloudData();
                         setTimeout(() => openCardModal(draw, isNew), 500);
                     }
                 }
@@ -4437,10 +4493,18 @@
             try {
                 const json = JSON.parse(decodeURIComponent(escape(atob(code))));
                 if (json.v === 2 && confirm("復元しますか？")) {
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(json.s));
-                    localStorage.setItem(CARD_STORAGE_KEY, JSON.stringify(json.c));
                     userStats = json.s;
                     userCards = json.c;
+                    const now = new Date().toISOString();
+                    if (currentUser) {
+                        localStorage.setItem('profile_' + currentUser + '_stats', JSON.stringify(userStats));
+                        localStorage.setItem('profile_' + currentUser + '_cards', JSON.stringify(userCards));
+                        localStorage.setItem('profile_' + currentUser + '_last_update', now);
+                    } else {
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(userStats));
+                        localStorage.setItem(CARD_STORAGE_KEY, JSON.stringify(userCards));
+                        localStorage.setItem('history_game_last_update', now);
+                    }
 
                     if (typeof saveCloudData === 'function') {
                         document.getElementById('import-area').value = "クラウドと同期中...";
