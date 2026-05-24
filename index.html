@@ -2809,6 +2809,9 @@
                 if (localStats) userStats = JSON.parse(localStats);
                 if (localCards) userCards = JSON.parse(localCards);
             } finally {
+                // Normalize card format (migrate strings to objects with grade 0)
+                userCards = (userCards || []).map(c => typeof c === 'string' ? { id: c, grade: 0 } : c);
+
                 // Apply loaded settings
                 isBgmEnabled = userSettings.bgm;
                 isSeEnabled = userSettings.se;
@@ -4494,7 +4497,7 @@
                 const json = JSON.parse(decodeURIComponent(escape(atob(code))));
                 if (json.v === 2 && confirm("復元しますか？")) {
                     userStats = json.s;
-                    userCards = json.c;
+                    userCards = (json.c || []).map(c => typeof c === 'string' ? { id: c, grade: 0 } : c);
                     const now = new Date().toISOString();
                     if (currentUser) {
                         localStorage.setItem('profile_' + currentUser + '_stats', JSON.stringify(userStats));
